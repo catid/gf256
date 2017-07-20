@@ -689,6 +689,7 @@ extern "C" void gf256_add_mem(void * GF256_RESTRICT vx,
     }
 #endif // GF256_TARGET_MOBILE
 
+#if !defined(GF256_TARGET_MOBILE)
     // Handle multiples of 16 bytes
     while (bytes >= 16)
     {
@@ -700,6 +701,7 @@ extern "C" void gf256_add_mem(void * GF256_RESTRICT vx,
 
         bytes -= 16, ++x16, ++y16;
     }
+#endif
 
     uint8_t * GF256_RESTRICT x1 = reinterpret_cast<uint8_t *>(x16);
     const uint8_t * GF256_RESTRICT y1 = reinterpret_cast<const uint8_t *>(y16);
@@ -1021,6 +1023,7 @@ extern "C" void gf256_mul_mem(void * GF256_RESTRICT vz, const void * GF256_RESTR
     const GF256_M128 * GF256_RESTRICT x16 = reinterpret_cast<const GF256_M128 *>(vx);
 
 #if defined(GF256_TARGET_MOBILE)
+#if defined(GF256_TRY_NEON)
     if (bytes >= 16 && CpuHasNeon64)
     {
         // Partial product tables; see above
@@ -1045,6 +1048,7 @@ extern "C" void gf256_mul_mem(void * GF256_RESTRICT vz, const void * GF256_RESTR
             bytes -= 16, ++x16, ++z16;
         } while (bytes >= 16);
     }
+#endif
 #else
 # if defined(GF256_TRY_AVX2)
     if (bytes >= 32 && CpuHasAVX2)
@@ -1164,6 +1168,7 @@ extern "C" void gf256_muladd_mem(void * GF256_RESTRICT vz, uint8_t y,
     const GF256_M128 * GF256_RESTRICT x16 = reinterpret_cast<const GF256_M128 *>(vx);
 
 #if defined(GF256_TARGET_MOBILE)
+#if defined(GF256_TRY_NEON)
     if (bytes >= 16 && CpuHasNeon64)
     {
         // Partial product tables; see above
@@ -1190,6 +1195,7 @@ extern "C" void gf256_muladd_mem(void * GF256_RESTRICT vz, uint8_t y,
             bytes -= 16, ++x16, ++z16;
         } while (bytes >= 16);
     }
+#endif
 #else // GF256_TARGET_MOBILE
 # if defined(GF256_TRY_AVX2)
     if (bytes >= 32 && CpuHasAVX2)
