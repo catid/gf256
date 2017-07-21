@@ -615,6 +615,8 @@ extern "C" void gf256_add_mem(void * GF256_RESTRICT vx,
 
         x16 = reinterpret_cast<GF256_M128 *>(x8 + count);
         y16 = reinterpret_cast<const GF256_M128 *>(y8 + count);
+
+		bytes -= (count * 8);
     }
 #else // GF256_TARGET_MOBILE
 # if defined(GF256_TRY_AVX2)
@@ -911,6 +913,8 @@ extern "C" void gf256_addset_mem(void * GF256_RESTRICT vz, const void * GF256_RE
         x16 = reinterpret_cast<const GF256_M128 *>(x8 + count);
         y16 = reinterpret_cast<const GF256_M128 *>(y8 + count);
         z16 = reinterpret_cast<GF256_M128 *>(z8 + count);
+
+		bytes -= (count * 8);
     }
 #else // GF256_TARGET_MOBILE
 # if defined(GF256_TRY_AVX2)
