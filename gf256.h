@@ -48,11 +48,10 @@
 // Library version
 #define GF256_VERSION 2
 
-
 //------------------------------------------------------------------------------
 // Platform/Architecture
 
-#if defined(ANDROID) || defined(IOS)
+#if defined(ANDROID) || defined(IOS) || defined(LINUX_ARM)
     #define GF256_TARGET_MOBILE
 #endif // ANDROID
 
