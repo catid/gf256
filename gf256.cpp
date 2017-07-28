@@ -28,6 +28,31 @@
 
 #include "gf256.h"
 
+#ifdef LINUX_ARM
+#include <unistd.h>
+#include <fcntl.h>
+#include <elf.h>
+#include <linux/auxvec.h>
+#endif
+
+//------------------------------------------------------------------------------
+// Workaround for ARMv7 that doesn't provide vqtbl1_*
+// This comes from linux-raid (https://www.spinics.net/lists/raid/msg58403.html)
+//
+#ifdef GF256_TRY_NEON
+#if __ARM_ARCH <= 7 && !defined(__aarch64__)
+static GF256_FORCE_INLINE uint8x16_t vqtbl1q_u8(uint8x16_t a, uint8x16_t b)
+{
+    union {
+        uint8x16_t	val;
+        uint8x8x2_t	pair;
+    } __a = { a };
+
+    return vcombine_u8(vtbl2_u8(__a.pair, vget_low_u8(b)),
+                       vtbl2_u8(__a.pair, vget_high_u8(b)));
+}
+#endif
+#endif
 
 //------------------------------------------------------------------------------
 // Self-Test
@@ -159,21 +184,24 @@ static bool gf256_self_test()
 // https://github.com/jedisct1/libsodium/blob/master/src/libsodium/sodium/runtime.c
 
 #if defined(HAVE_ANDROID_GETCPUFEATURES)
-    #include <cpu-features.h>
+#include <cpu-features.h>
 #endif
 
 #if defined(GF256_TRY_NEON)
 # if defined(IOS) && defined(__ARM_NEON__)
-        // Requires iPhone 5S or newer
-        static const bool CpuHasNeon = true;
-        static const bool CpuHasNeon64 = true;
-# else
-        // Remember to add LOCAL_STATIC_LIBRARIES := cpufeatures
-        static bool CpuHasNeon = false; // V6 / V7
-        static bool CpuHasNeon64 = false; // 64-bit
+// Requires iPhone 5S or newer
+static const bool CpuHasNeon = true;
+static const bool CpuHasNeon64 = true;
+# else // ANDROID or LINUX_ARM
+#  if defined(__aarch64__)
+static bool CpuHasNeon = true;      // if AARCH64, then we have NEON for sure...
+static bool CpuHasNeon64 = true;    // And we have ASIMD
+#  else
+static bool CpuHasNeon = false;     // if not, then we have to check at runtime.
+static bool CpuHasNeon64 = false;   // And we don't have ASIMD
+#  endif
 # endif
 #endif
-
 
 #if !defined(GF256_TARGET_MOBILE)
 
@@ -227,12 +255,39 @@ static void _cpuid(unsigned int cpu_info[4U], const unsigned int cpu_info_type)
 #endif
 }
 
+#else
+#if defined(LINUX_ARM)
+static void checkLinuxARMNeonCapabilities( bool& cpuHasNeon )
+{
+    auto cpufile = open("/proc/self/auxv", O_RDONLY);
+    Elf32_auxv_t auxv;
+    if (cpufile >= 0)
+    {
+        const auto size_auxv_t = sizeof(Elf32_auxv_t);
+        while (read(cpufile, &auxv, size_auxv_t) == size_auxv_t)
+        {
+            if (auxv.a_type == AT_HWCAP)
+            {
+                cpuHasNeon = (auxv.a_un.a_val & 4096) != 0;
+                break;
+            }
+        }
+        close(cpufile);
+    }
+    else
+    {
+        cpuHasNeon = false;
+    }
+}
+#endif
 #endif // defined(GF256_TARGET_MOBILE)
-
 
 static void gf256_architecture_init()
 {
-#if defined(GF256_TRY_NEON) && defined(HAVE_ANDROID_GETCPUFEATURES)
+#if defined(GF256_TRY_NEON)
+
+    // Check for NEON support on Android platform
+#if defined(HAVE_ANDROID_GETCPUFEATURES)
     AndroidCpuFamily family = android_getCpuFamily();
     if (family == ANDROID_CPU_FAMILY_ARM)
     {
@@ -246,6 +301,13 @@ static void gf256_architecture_init()
             CpuHasNeon64 = true;
     }
 #endif
+
+#if defined(LINUX_ARM)
+    // Check for NEON support on other ARM/Linux platforms
+    checkLinuxARMNeonCapabilities(CpuHasNeon);
+#endif
+
+#endif //GF256_TRY_NEON
 
 #if !defined(GF256_TARGET_MOBILE)
     unsigned int cpu_info[4];
@@ -500,8 +562,8 @@ static void gf256_mul_mem_init()
 #if defined(GF256_TRY_NEON)
         if (CpuHasNeon)
         {
-            vst1q_u8(GF256Ctx.MM128_TABLE_LO_Y + y, vld1q_u8(lo));
-            vst1q_u8(GF256Ctx.MM128_TABLE_LO_Y + y, vst1q_u8(hi));
+            GF256Ctx.MM128.TABLE_LO_Y[y] = vld1q_u8(lo);
+            GF256Ctx.MM128.TABLE_HI_Y[y] = vld1q_u8(hi);
         }
 #elif !defined(GF256_TARGET_MOBILE)
         const GF256_M128 table_lo = _mm_loadu_si128((GF256_M128*)lo);
@@ -575,19 +637,19 @@ extern "C" void gf256_add_mem(void * GF256_RESTRICT vx,
     {
         while (bytes >= 64)
         {
-            GF256_M128 x0 = vld1q_u8(x16);
-            GF256_M128 x1 = vld1q_u8(x16 + 1);
-            GF256_M128 x2 = vld1q_u8(x16 + 2);
-            GF256_M128 x3 = vld1q_u8(x16 + 3);
-            GF256_M128 y0 = vld1q_u8(y16);
-            GF256_M128 y1 = vld1q_u8(y16 + 1);
-            GF256_M128 y2 = vld1q_u8(y16 + 2);
-            GF256_M128 y3 = vld1q_u8(y16 + 3);
+            GF256_M128 x0 = vld1q_u8((uint8_t*) x16);
+            GF256_M128 x1 = vld1q_u8((uint8_t*)(x16 + 1) );
+            GF256_M128 x2 = vld1q_u8((uint8_t*)(x16 + 2) );
+            GF256_M128 x3 = vld1q_u8((uint8_t*)(x16 + 3) );
+            GF256_M128 y0 = vld1q_u8((uint8_t*)y16);
+            GF256_M128 y1 = vld1q_u8((uint8_t*)(y16 + 1));
+            GF256_M128 y2 = vld1q_u8((uint8_t*)(y16 + 2));
+            GF256_M128 y3 = vld1q_u8((uint8_t*)(y16 + 3));
 
-            vst1q_u8(x16,     veorq_u8(x0, y0));
-            vst1q_u8(x16 + 1, veorq_u8(x1, y1));
-            vst1q_u8(x16 + 2, veorq_u8(x2, y2));
-            vst1q_u8(x16 + 3, veorq_u8(x3, y3));
+            vst1q_u8((uint8_t*)x16,     veorq_u8(x0, y0));
+            vst1q_u8((uint8_t*)(x16 + 1), veorq_u8(x1, y1));
+            vst1q_u8((uint8_t*)(x16 + 2), veorq_u8(x2, y2));
+            vst1q_u8((uint8_t*)(x16 + 3), veorq_u8(x3, y3));
 
             bytes -= 64, x16 += 4, y16 += 4;
         }
@@ -595,10 +657,10 @@ extern "C" void gf256_add_mem(void * GF256_RESTRICT vx,
         // Handle multiples of 16 bytes
         while (bytes >= 16)
         {
-            GF256_M128 x0 = vld1q_u8(x16);
-            GF256_M128 y0 = vld1q_u8(y16);
+            GF256_M128 x0 = vld1q_u8((uint8_t*)x16);
+            GF256_M128 y0 = vld1q_u8((uint8_t*)y16);
 
-            vst1q_u8(x16, veorq_u8(x0, y0));
+            vst1q_u8((uint8_t*)x16, veorq_u8(x0, y0));
 
             bytes -= 16, ++x16, ++y16;
         }
@@ -754,12 +816,12 @@ extern "C" void gf256_add2_mem(void * GF256_RESTRICT vz, const void * GF256_REST
         while (bytes >= 16)
         {
             // z[i] = z[i] xor x[i] xor y[i]
-            vst1q_u8(z16,
+            vst1q_u8((uint8_t*)z16,
                 veorq_u8(
-                    vld1q_u8(z16),
+                    vld1q_u8((uint8_t*)z16),
                     veorq_u8(
-                        vld1q_u8(x16),
-                        vld1q_u8(y16))));
+                        vld1q_u8((uint8_t*)x16),
+                        vld1q_u8((uint8_t*)y16))));
 
             bytes -= 16, ++x16, ++y16, ++z16;
         }
@@ -870,19 +932,19 @@ extern "C" void gf256_addset_mem(void * GF256_RESTRICT vz, const void * GF256_RE
     {
         while (bytes >= 64)
         {
-            GF256_M128 x0 = vld1q_u8(x16);
-            GF256_M128 x1 = vld1q_u8(x16 + 1);
-            GF256_M128 x2 = vld1q_u8(x16 + 2);
-            GF256_M128 x3 = vld1q_u8(x16 + 3);
-            GF256_M128 y0 = vld1q_u8(y16);
-            GF256_M128 y1 = vld1q_u8(y16 + 1);
-            GF256_M128 y2 = vld1q_u8(y16 + 2);
-            GF256_M128 y3 = vld1q_u8(y16 + 3);
+            GF256_M128 x0 = vld1q_u8((uint8_t*)x16);
+            GF256_M128 x1 = vld1q_u8((uint8_t*)(x16 + 1));
+            GF256_M128 x2 = vld1q_u8((uint8_t*)(x16 + 2));
+            GF256_M128 x3 = vld1q_u8((uint8_t*)(x16 + 3));
+            GF256_M128 y0 = vld1q_u8((uint8_t*)(y16));
+            GF256_M128 y1 = vld1q_u8((uint8_t*)(y16 + 1));
+            GF256_M128 y2 = vld1q_u8((uint8_t*)(y16 + 2));
+            GF256_M128 y3 = vld1q_u8((uint8_t*)(y16 + 3));
 
-            vst1q_u8(z16,     veorq_u8(x0, y0));
-            vst1q_u8(z16 + 1, veorq_u8(x1, y1));
-            vst1q_u8(z16 + 2, veorq_u8(x2, y2));
-            vst1q_u8(z16 + 3, veorq_u8(x3, y3));
+            vst1q_u8((uint8_t*)z16,     veorq_u8(x0, y0));
+            vst1q_u8((uint8_t*)(z16 + 1), veorq_u8(x1, y1));
+            vst1q_u8((uint8_t*)(z16 + 2), veorq_u8(x2, y2));
+            vst1q_u8((uint8_t*)(z16 + 3), veorq_u8(x3, y3));
 
             bytes -= 64, x16 += 4, y16 += 4, z16 += 4;
         }
@@ -891,10 +953,10 @@ extern "C" void gf256_addset_mem(void * GF256_RESTRICT vz, const void * GF256_RE
         while (bytes >= 16)
         {
             // z[i] = x[i] xor y[i]
-            vst1q_u8(z16,
-                veorq_u8(
-                    vld1q_u8(x16),
-                    vld1q_u8(y16)));
+            vst1q_u8((uint8_t*)z16,
+                     veorq_u8(
+                         vld1q_u8((uint8_t*)x16),
+                         vld1q_u8((uint8_t*)y16)));
 
             bytes -= 16, ++x16, ++y16, ++z16;
         }
@@ -1028,11 +1090,11 @@ extern "C" void gf256_mul_mem(void * GF256_RESTRICT vz, const void * GF256_RESTR
 
 #if defined(GF256_TARGET_MOBILE)
 #if defined(GF256_TRY_NEON)
-    if (bytes >= 16 && CpuHasNeon64)
+    if (bytes >= 16 && CpuHasNeon)
     {
         // Partial product tables; see above
-        const GF256_M128 table_lo_y = vld1q_u8(GF256Ctx.MM128.TABLE_LO_Y + y);
-        const GF256_M128 table_hi_y = vld1q_u8(GF256Ctx.MM128.TABLE_HI_Y + y);
+        const GF256_M128 table_lo_y = vld1q_u8((uint8_t*)(GF256Ctx.MM128.TABLE_LO_Y + y));
+        const GF256_M128 table_hi_y = vld1q_u8((uint8_t*)(GF256Ctx.MM128.TABLE_HI_Y + y));
 
         // clr_mask = 0x0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f
         const GF256_M128 clr_mask = vdupq_n_u8(0x0f);
@@ -1041,13 +1103,13 @@ extern "C" void gf256_mul_mem(void * GF256_RESTRICT vz, const void * GF256_RESTR
         do
         {
             // See above comments for details
-            GF256_M128 x0 = vld1q_u8(x16);
+            GF256_M128 x0 = vld1q_u8((uint8_t*)x16);
             GF256_M128 l0 = vandq_u8(x0, clr_mask);
             x0 = vshrq_n_u8(x0, 4);
             GF256_M128 h0 = vandq_u8(x0, clr_mask);
             l0 = vqtbl1q_u8(table_lo_y, l0);
             h0 = vqtbl1q_u8(table_hi_y, h0);
-            vst1q_u8(z16, veorq_u8(l0, h0));
+            vst1q_u8((uint8_t*)z16, veorq_u8(l0, h0));
 
             bytes -= 16, ++x16, ++z16;
         } while (bytes >= 16);
@@ -1173,11 +1235,11 @@ extern "C" void gf256_muladd_mem(void * GF256_RESTRICT vz, uint8_t y,
 
 #if defined(GF256_TARGET_MOBILE)
 #if defined(GF256_TRY_NEON)
-    if (bytes >= 16 && CpuHasNeon64)
+    if (bytes >= 16 && CpuHasNeon)
     {
         // Partial product tables; see above
-        const GF256_M128 table_lo_y = vld1q_u8(GF256Ctx.MM128.TABLE_LO_Y + y);
-        const GF256_M128 table_hi_y = vld1q_u8(GF256Ctx.MM128.TABLE_HI_Y + y);
+        const GF256_M128 table_lo_y = vld1q_u8((uint8_t*)(GF256Ctx.MM128.TABLE_LO_Y + y));
+        const GF256_M128 table_hi_y = vld1q_u8((uint8_t*)(GF256Ctx.MM128.TABLE_HI_Y + y));
 
         // clr_mask = 0x0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f
         const GF256_M128 clr_mask = vdupq_n_u8(0x0f);
@@ -1186,16 +1248,17 @@ extern "C" void gf256_muladd_mem(void * GF256_RESTRICT vz, uint8_t y,
         do
         {
             // See above comments for details
-            GF256_M128 x0 = vld1q_u8(x16);
+            GF256_M128 x0 = vld1q_u8((uint8_t*)x16);
             GF256_M128 l0 = vandq_u8(x0, clr_mask);
-            x0 = vshrq_n_u8(x0, 4);
+
+            // x0 = vshrq_n_u8(x0, 4);
+            x0 = (GF256_M128)vshrq_n_u64( (uint64x2_t)x0, 4);
             GF256_M128 h0 = vandq_u8(x0, clr_mask);
             l0 = vqtbl1q_u8(table_lo_y, l0);
             h0 = vqtbl1q_u8(table_hi_y, h0);
             const GF256_M128 p0 = veorq_u8(l0, h0);
-            const GF256_M128 z0 = vld1q_u8(z16);
-            vst1q_u8(z16, veorq_u8(p0, z0));
-
+            const GF256_M128 z0 = vld1q_u8((uint8_t*)z16);
+            vst1q_u8((uint8_t*)z16, veorq_u8(p0, z0));
             bytes -= 16, ++x16, ++z16;
         } while (bytes >= 16);
     }
