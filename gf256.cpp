@@ -1,5 +1,6 @@
-/*
-    Copyright (c) 2017 Christopher A. Taylor.  All rights reserved.
+/** \file
+    \brief GF(256) Main C API Source
+    \copyright Copyright (c) 2017 Christopher A. Taylor.  All rights reserved.
 
     Redistribution and use in source and binary forms, with or without
     modification, are permitted provided that the following conditions are met:
@@ -44,8 +45,8 @@
 static GF256_FORCE_INLINE uint8x16_t vqtbl1q_u8(uint8x16_t a, uint8x16_t b)
 {
     union {
-        uint8x16_t	val;
-        uint8x8x2_t	pair;
+        uint8x16_t    val;
+        uint8x8x2_t    pair;
     } __a = { a };
 
     return vcombine_u8(vtbl2_u8(__a.pair, vget_low_u8(b)),
@@ -678,7 +679,7 @@ extern "C" void gf256_add_mem(void * GF256_RESTRICT vx,
         x16 = reinterpret_cast<GF256_M128 *>(x8 + count);
         y16 = reinterpret_cast<const GF256_M128 *>(y8 + count);
 
-		bytes -= (count * 8);
+        bytes -= (count * 8);
     }
 #else // GF256_TARGET_MOBILE
 # if defined(GF256_TRY_AVX2)
@@ -976,7 +977,7 @@ extern "C" void gf256_addset_mem(void * GF256_RESTRICT vz, const void * GF256_RE
         y16 = reinterpret_cast<const GF256_M128 *>(y8 + count);
         z16 = reinterpret_cast<GF256_M128 *>(z8 + count);
 
-		bytes -= (count * 8);
+        bytes -= (count * 8);
     }
 #else // GF256_TARGET_MOBILE
 # if defined(GF256_TRY_AVX2)
