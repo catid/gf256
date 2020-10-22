@@ -1459,6 +1459,7 @@ extern "C" void gf256_memswap(void * GF256_RESTRICT vx, void * GF256_RESTRICT vy
 
     x16 += count;
     y16 += count;
+    bytes -= count * 8;
 #else
     GF256_M128 * GF256_RESTRICT x16 = reinterpret_cast<GF256_M128 *>(vx);
     GF256_M128 * GF256_RESTRICT y16 = reinterpret_cast<GF256_M128 *>(vy);
